@@ -1,0 +1,58 @@
+# Python编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 发布和构建文件
+dist/
+build/
+*.spec
+*.exe
+*.out
+*.app
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.env/
+.venv/
+
+# IDE配置文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 日志文件
+*.log
+error.log
+
+# 临时文件
+temp/
+tmp/
+
+# 测试覆盖率报告
+.coverage
+htmlcov/
+
+# 本地配置文件
+local_settings.py
+config.ini
+
+# 编译的二进制文件
+tcp_server
+tcp_client
+tcp_server_*
+tcp_client_*
+
+# 压缩包
+*.zip
+*.tar.gz
+*.rar
+
+# 其他不需要的文件
+*.bak
+*.tmp
+*~ 

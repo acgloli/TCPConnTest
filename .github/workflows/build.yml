@@ -1,0 +1,266 @@
+name: Build TCP Test Tools
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: '3.9'
+            architecture: 'x64'
+          - os: windows-latest
+            python-version: '3.9'
+            architecture: 'x64'
+          - os: windows-latest
+            python-version: '3.9'
+            architecture: 'x86'
+      fail-fast: false
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        architecture: ${{ matrix.architecture }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip uninstall -y typing || true
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Show Python Info
+      run: |
+        python --version
+        pip list
+        echo "Current directory:"
+        pwd
+        echo "Directory contents:"
+        ls -la
+      shell: bash
+        
+    - name: Build Server (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        pyinstaller --clean --onefile ^
+          --name TCPConnTest_server_${{ runner.os }}_${{ matrix.architecture }} ^
+          --add-data "README.md;." ^
+          TCPConnTest_server.py
+      shell: cmd
+    
+    - name: Build Client (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        pyinstaller --clean --onefile ^
+          --name TCPConnTest_client_${{ runner.os }}_${{ matrix.architecture }} ^
+          --add-data "README.md;." ^
+          TCPConnTest_client.py
+      shell: cmd
+    
+    - name: Build Server (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        pyinstaller --clean --onefile \
+          --name TCPConnTest_server_${{ runner.os }}_${{ matrix.architecture }} \
+          --add-data "README.md:." \
+          --target-arch ${{ matrix.architecture }} \
+          TCPConnTest_server.py
+    
+    - name: Build Client (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        pyinstaller --clean --onefile \
+          --name TCPConnTest_client_${{ runner.os }}_${{ matrix.architecture }} \
+          --add-data "README.md:." \
+          --target-arch ${{ matrix.architecture }} \
+          TCPConnTest_client.py
+    
+    - name: List Build Directory
+      run: |
+        echo "Current directory contents:"
+        ls -la
+        echo "Dist directory contents:"
+        ls -la dist/
+      shell: bash
+    
+    - name: Prepare Release Files
+      run: |
+        mkdir -p release
+        cp dist/* release/
+        if [ -f "README.md" ]; then
+          cp README.md release/
+        fi
+        # 根据操作系统选择性复制启动脚本
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          cp run_server.sh release/ || true
+          cp run_client.sh release/ || true
+          chmod +x release/TCPConnTest_server_Linux_* || true
+          chmod +x release/TCPConnTest_client_Linux_* || true
+          chmod +x release/*.sh || true
+        else
+          # Windows 系统复制 .bat 文件
+          cp run_server.bat release/ || true
+          cp run_client.bat release/ || true
+        fi
+      shell: bash
+    
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: TCPConnTest_${{ runner.os }}_${{ matrix.architecture }}
+        path: release/
+        retention-days: 5
+
+  create-release:
+    needs: [build, build-linux-other]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: List artifacts
+      shell: bash
+      run: |
+        echo "===== Artifacts Contents ====="
+        ls -R artifacts/
+        
+    - name: Create release packages
+      shell: bash
+      run: |
+        # 清理并创建目录
+        rm -rf zips
+        mkdir -p zips
+        
+        # 显示当前目录结构
+        pwd
+        ls -la
+        
+        # 处理 artifacts 目录
+        cd artifacts
+        for d in */; do
+          if [ -d "$d" ]; then
+            name=$(basename "$d")
+            echo "Processing: $name"
+            (cd "$d" && zip -r "../../zips/$name.zip" .)
+          fi
+        done
+        
+        # 显示结果
+        cd ../zips
+        echo "Created ZIP files:"
+        ls -la
+      
+    - name: Upload Release Assets
+      uses: softprops/action-gh-release@v2
+      if: github.event_name == 'release'
+      env:
+        GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      with:
+        files: zips/*.zip
+        fail_on_unmatched_files: false
+        draft: false
+        prerelease: false
+
+  build-linux-other:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: 'x86'
+            platform: 'linux/386'
+          - arch: 'arm64'
+            platform: 'linux/arm64'
+      fail-fast: false
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build in Docker
+      run: |
+        # 创建 Dockerfile
+        cat > Dockerfile << 'EOF'
+        FROM --platform=${{ matrix.platform }} python:3.9-slim
+        
+        WORKDIR /app
+        COPY . .
+        
+        # 安装系统依赖
+        RUN apt-get update && \
+            apt-get install -y binutils && \
+            rm -rf /var/lib/apt/lists/*
+        
+        RUN python -m pip install --upgrade pip && \
+            pip install -r requirements.txt && \
+            pip install pyinstaller
+        
+        RUN pyinstaller --clean --onefile \
+            --name TCPConnTest_server_Linux_${{ matrix.arch }} \
+            --add-data "README.md:." \
+            TCPConnTest_server.py
+        
+        RUN pyinstaller --clean --onefile \
+            --name TCPConnTest_client_Linux_${{ matrix.arch }} \
+            --add-data "README.md:." \
+            TCPConnTest_client.py
+        EOF
+        
+        # 构建镜像
+        docker buildx build --platform ${{ matrix.platform }} \
+          --tag builder \
+          --load \
+          .
+        
+        # 创建临时容器并复制文件
+        mkdir -p dist
+        container_id=$(docker create builder)
+        docker cp $container_id:/app/dist/. ./dist/
+        docker rm $container_id
+        
+        echo "Build output contents:"
+        ls -la dist/
+    
+    - name: Prepare Release Files
+      run: |
+        mkdir -p release
+        cp dist/* release/ || true
+        if [ -f "README.md" ]; then
+          cp README.md release/
+        fi
+        cp run_server.sh release/ || true
+        cp run_client.sh release/ || true
+        chmod +x release/TCPConnTest_server_Linux_* || true
+        chmod +x release/TCPConnTest_client_Linux_* || true
+        chmod +x release/*.sh || true
+        
+        echo "Release directory contents:"
+        ls -la release/
+    
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: TCPConnTest_Linux_${{ matrix.arch }}
+        path: release/
+        retention-days: 5 
+        
